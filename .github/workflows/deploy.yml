@@ -1,0 +1,91 @@
+name: ci-cd
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, xml, ctype, dom, fileinfo, pdo, pgsql, gd, curl, redis
+          coverage: none
+
+      - name: Composer install (dev)
+        run: composer install --prefer-dist --no-progress
+
+      - name: Lint (Pint)
+        run: vendor/bin/pint --test || true
+
+      - name: Static analysis (Larastan)
+        run: vendor/bin/phpstan analyse --no-progress --level=max || true
+
+      - name: Tests (Pest/PHPUnit)
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+        run: vendor/bin/pest || php artisan test
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci && npm run build
+
+      - name: Production deps only
+        run: composer install --no-dev --prefer-dist --no-progress
+
+      - name: Create artifact
+        run: |
+          tar -czf release.tgz \
+            app bootstrap config database public/build resources routes vendor artisan composer.json composer.lock
+
+      - uses: actions/upload-artifact@v4
+        with: { name: release, path: release.tgz }
+
+  deploy_prod:
+    needs: [build_test]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: release, path: . }
+
+      - name: Upload & deploy to droplet
+        env:
+          HOST: ${{ secrets.DROPLET_HOST }}
+          USER: ${{ secrets.DROPLET_USER }}
+          KEY:  ${{ secrets.DROPLET_SSH_KEY }}
+          ENV_B64: ${{ secrets.ENV_FILE_BASE64 }}
+        run: |
+          echo "$KEY" > key && chmod 600 key
+          scp -i key -o StrictHostKeyChecking=no release.tgz $USER@$HOST:/tmp/release.tgz
+          ssh -i key -o StrictHostKeyChecking=no $USER@$HOST bash -s <<'SH'
+            set -euo pipefail
+            TS=$(date +%Y%m%d_%H%M%S)
+            BASE=/var/www/memory-vault
+            REL=$BASE/releases/$TS
+            mkdir -p $REL
+            tar -xzf /tmp/release.tgz -C $REL
+            rm /tmp/release.tgz
+
+            # shared links
+            ln -sfn $BASE/shared/.env $REL/.env
+            mkdir -p $BASE/shared/storage
+            rm -rf $REL/storage
+            ln -sfn $BASE/shared/storage $REL/storage
+
+            cd $REL
+            php artisan storage:link || true
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan migrate --force || true
+
+            ln -sfn $REL $BASE/current
+            systemctl reload php-fpm || systemctl reload php8.4-fpm || true
+            supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+          SH
