@@ -19,13 +19,21 @@ jobs:
       - name: Composer install (dev)
         run: composer install --prefer-dist --no-progress
 
+      - name: Prepare env for tests (app key)
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+        env:
+          APP_ENV: testing
+
       - name: Lint (Pint)
         run: vendor/bin/pint --test || true
 
+      # Larastan not installed by default in fresh app; keep non-blocking
       - name: Static analysis (Larastan)
         run: vendor/bin/phpstan analyse --no-progress --level=max || true
 
-      - name: Tests (Pest/PHPUnit)
+      - name: Tests (Pest or PHPUnit)
         env:
           DB_CONNECTION: sqlite
           DB_DATABASE: ':memory:'
@@ -59,7 +67,6 @@ jobs:
           HOST: ${{ secrets.DROPLET_HOST }}
           USER: ${{ secrets.DROPLET_USER }}
           KEY:  ${{ secrets.DROPLET_SSH_KEY }}
-          ENV_B64: ${{ secrets.ENV_FILE_BASE64 }}
         run: |
           echo "$KEY" > key && chmod 600 key
           scp -i key -o StrictHostKeyChecking=no release.tgz $USER@$HOST:/tmp/release.tgz
