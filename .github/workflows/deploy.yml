@@ -57,7 +57,7 @@ jobs:
       - name: Create artifact
         run: |
           tar -czf release.tgz \
-            app bootstrap config database public/build resources routes vendor artisan composer.json composer.lock
+            app bootstrap config database public resources routes vendor artisan composer.json composer.lock
 
       - uses: actions/upload-artifact@v4
         with:
