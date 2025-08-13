@@ -275,3 +275,5 @@
         @endif
     </body>
 </html>
+
+<p id="ci-check">CI/CD OK — 2025-08-13 07:59:07 UTC</p>
