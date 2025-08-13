@@ -4,6 +4,12 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(Tests\TestCase::class, RefreshDatabase::class)->in('Feature');
 
+
+use Tests\TestCase;
+
+// Use the app TestCase for Feature tests (no DB reset needed yet)
+uses(TestCase::class)->in('Feature');
+
 /*
 |--------------------------------------------------------------------------
 | Test Case
