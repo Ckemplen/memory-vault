@@ -5,10 +5,19 @@
   <form method="POST" action="{{ route('admin.invitations.store') }}" class="mb-6">
     @csrf
     <div class="grid gap-4 grid-cols-1 md:grid-cols-4">
-      <div><x-label value="Email (optional)" /><x-input name="email" type="email"/></div>
-      <div><x-label value="Expires in (days)" /><x-input name="expires_in" type="number" min="1" max="365"/></div>
-      <div><x-label value="Max uses" /><x-input name="max_uses" type="number" min="1" max="10" value="1"/></div>
-      <div class="flex items-end"><x-button>Create invite</x-button></div>
+      <div>
+        <x-input-label for="email" value="Email (optional)" />
+        <x-text-input id="email" name="email" type="email" class="w-full" />
+      </div>
+      <div>
+        <x-input-label for="expires_in" value="Expires in (days)" />
+        <x-text-input id="expires_in" name="expires_in" type="number" min="1" max="365" class="w-full" />
+      </div>
+      <div>
+        <x-input-label for="max_uses" value="Max uses" />
+        <x-text-input id="max_uses" name="max_uses" type="number" min="1" max="10" value="1" class="w-full" />
+      </div>
+      <div class="flex items-end"><x-primary-button>Create invite</x-primary-button></div>
     </div>
   </form>
 
