@@ -1,0 +1,5 @@
+<?php
+
+it('serves the public landing (login) to guests', function () {
+    $this->get('/')->assertStatus(200); // Breeze login view
+});
