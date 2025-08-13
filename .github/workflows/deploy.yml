@@ -82,71 +82,72 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # Handle secrets with literal \n
+          # SSH key may contain literal \n; normalize to real newlines.
           echo "$KEY" | sed 's/\\n/\n/g' > key
           chmod 600 key
 
-          # Optional: quick SSH preflight
+          # Quick preflight (helps fail fast on auth issues)
           ssh -i key -o BatchMode=yes -o StrictHostKeyChecking=no "$USER@$HOST" 'whoami && uname -a'
 
           # Upload artifact
           scp -i key -o StrictHostKeyChecking=no release.tgz "$USER@$HOST:/tmp/release.tgz"
 
-          # Remote deploy (expects .env to already exist in $SHARED)
+          # Remote deploy
           ssh -i key -o StrictHostKeyChecking=no "$USER@$HOST" bash -s <<'SH'
-set -euo pipefail
-BASE=/var/www/memory-vault
-REL=$BASE/releases
-SHARED=$BASE/shared
-TS=$(date +%Y%m%d_%H%M%S)
-DST=$REL/$TS
+          set -euo pipefail
 
-echo "==> Ensure base structure"
-sudo mkdir -p "$REL" "$SHARED"/{storage/{app,framework/{cache,sessions,views},logs},database}
-sudo touch "$SHARED/database/database.sqlite"
-sudo chown -R www-data:www-data "$SHARED"
-sudo chmod -R ug+rwX "$SHARED"
+          BASE=/var/www/memory-vault
+          REL=$BASE/releases
+          SHARED=$BASE/shared
+          TS=$(date +%Y%m%d_%H%M%S)
+          DST=$REL/$TS
 
-echo "==> Require existing .env in shared"
-test -f "$SHARED/.env" || { echo "ERROR: $SHARED/.env is missing. Create it first."; exit 1; }
+          echo "==> Ensure base structure"
+          sudo mkdir -p "$REL" "$SHARED"/{storage/{app,framework/{cache,sessions,views},logs},database}
+          sudo touch "$SHARED/database/database.sqlite"
+          sudo chown -R www-data:www-data "$SHARED"
+          sudo chmod -R ug+rwX "$SHARED"
 
-echo "==> Unpack new release"
-sudo mkdir -p "$DST"
-sudo tar -xzf /tmp/release.tgz -C "$DST"
-sudo rm -f /tmp/release.tgz
+          echo "==> Require existing .env in shared"
+          test -f "$SHARED/.env" || { echo "ERROR: $SHARED/.env is missing. Create it first."; exit 1; }
 
-echo "==> Link shared resources"
-sudo ln -sfn "$SHARED/.env"     "$DST/.env"
-sudo rm -rf  "$DST/storage"   && sudo ln -sfn "$SHARED/storage"  "$DST/storage"
-sudo rm -rf  "$DST/database"  && sudo ln -sfn "$SHARED/database" "$DST/database"
+          echo "==> Unpack new release"
+          sudo mkdir -p "$DST"
+          sudo tar -xzf /tmp/release.tgz -C "$DST"
+          sudo rm -f /tmp/release.tgz
 
-# Guard Pail in prod (harmless if absent)
-sudo sed -i 's/->withPail();/\/\/ ->withPail();/' "$DST/bootstrap/app.php" || true
+          echo "==> Link shared resources"
+          sudo ln -sfn "$SHARED/.env"     "$DST/.env"
+          sudo rm -rf  "$DST/storage"   && sudo ln -sfn "$SHARED/storage"  "$DST/storage"
+          sudo rm -rf  "$DST/database"  && sudo ln -sfn "$SHARED/database" "$DST/database"
 
-echo "==> Clear caches"
-sudo -u www-data php "$DST/artisan" config:clear || true
-sudo -u www-data php "$DST/artisan" route:clear  || true
-sudo -u www-data php "$DST/artisan" view:clear   || true
+          # Guard Pail in prod (harmless if not present)
+          sudo sed -i 's/->withPail();/\/\/ ->withPail();/' "$DST/bootstrap/app.php" || true
 
-echo "==> Ensure APP_KEY exists (do not overwrite if present)"
-if ! grep -q 'APP_KEY=base64:' "$SHARED/.env"; then
-  sudo -u www-data php "$DST/artisan" key:generate --force
-fi
+          echo "==> Clear caches"
+          sudo -u www-data php "$DST/artisan" config:clear || true
+          sudo -u www-data php "$DST/artisan" route:clear  || true
+          sudo -u www-data php "$DST/artisan" view:clear   || true
 
-echo "==> Migrate + warm caches"
-sudo -u www-data php "$DST/artisan" migrate --force || true
-sudo -u www-data php "$DST/artisan" config:cache route:cache view:cache || true
+          echo "==> Ensure APP_KEY exists (do not overwrite if present)"
+          if ! grep -q 'APP_KEY=base64:' "$SHARED/.env"; then
+            sudo -u www-data php "$DST/artisan" key:generate --force
+          fi
 
-echo "==> Switch current"
-sudo ln -sfn "$DST" "$BASE/current"
+          echo "==> Migrate + warm caches"
+          sudo -u www-data php "$DST/artisan" migrate --force || true
+          sudo -u www-data php "$DST/artisan" config:cache route:cache view:cache || true
 
-echo "==> Reload PHP-FPM and queues"
-sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.3-fpm || true
-sudo supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+          echo "==> Switch current"
+          sudo ln -sfn "$DST" "$BASE/current"
 
-echo "==> Keep only 2 latest releases"
-cd "$REL" && ls -1t | tail -n +3 | xargs -r sudo rm -rf
+          echo "==> Reload PHP-FPM and queues"
+          sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.3-fpm || true
+          sudo supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
 
-echo "==> Disk usage"
-df -h "$BASE"
-SH
+          echo "==> Keep only 2 latest releases"
+          cd "$REL" && ls -1t | tail -n +3 | xargs -r sudo rm -rf
+
+          echo "==> Disk usage"
+          df -h "$BASE"
+          SH
