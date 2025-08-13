@@ -80,9 +80,20 @@ jobs:
           USER: ${{ secrets.DROPLET_USER }}
           KEY:  ${{ secrets.DROPLET_SSH_KEY }}
         run: |
-          echo "$KEY" > key && chmod 600 key
-          scp -i key -o StrictHostKeyChecking=no release.tgz $USER@$HOST:/tmp/release.tgz
-          ssh -i key -o StrictHostKeyChecking=no $USER@$HOST bash -s <<'SH'
+          set -euxo pipefail
+
+          # Handle secrets with literal \n
+          echo "$KEY" | sed 's/\\n/\n/g' > key
+          chmod 600 key
+
+          # Optional: quick SSH preflight
+          ssh -i key -o BatchMode=yes -o StrictHostKeyChecking=no "$USER@$HOST" 'whoami && uname -a'
+
+          # Upload artifact
+          scp -i key -o StrictHostKeyChecking=no release.tgz "$USER@$HOST:/tmp/release.tgz"
+
+          # Remote deploy (expects .env to already exist in $SHARED)
+          ssh -i key -o StrictHostKeyChecking=no "$USER@$HOST" bash -s <<'SH'
 set -euo pipefail
 BASE=/var/www/memory-vault
 REL=$BASE/releases
@@ -90,38 +101,52 @@ SHARED=$BASE/shared
 TS=$(date +%Y%m%d_%H%M%S)
 DST=$REL/$TS
 
-# ensure base structure exists
-sudo mkdir -p $REL $SHARED/{storage,database}
-sudo touch $SHARED/database/database.sqlite
-sudo chown -R www-data:www-data $SHARED
-sudo chmod -R ug+rwX $SHARED
+echo "==> Ensure base structure"
+sudo mkdir -p "$REL" "$SHARED"/{storage/{app,framework/{cache,sessions,views},logs},database}
+sudo touch "$SHARED/database/database.sqlite"
+sudo chown -R www-data:www-data "$SHARED"
+sudo chmod -R ug+rwX "$SHARED"
 
-# unpack new release
+echo "==> Require existing .env in shared"
+test -f "$SHARED/.env" || { echo "ERROR: $SHARED/.env is missing. Create it first."; exit 1; }
+
+echo "==> Unpack new release"
 sudo mkdir -p "$DST"
 sudo tar -xzf /tmp/release.tgz -C "$DST"
 sudo rm -f /tmp/release.tgz
 
-# link shared resources into the new release
-sudo ln -sfn $SHARED/.env "$DST/.env"
-sudo rm -rf "$DST/storage" && sudo ln -sfn $SHARED/storage "$DST/storage"
-sudo rm -rf "$DST/database" && sudo ln -sfn $SHARED/database "$DST/database"
+echo "==> Link shared resources"
+sudo ln -sfn "$SHARED/.env"     "$DST/.env"
+sudo rm -rf  "$DST/storage"   && sudo ln -sfn "$SHARED/storage"  "$DST/storage"
+sudo rm -rf  "$DST/database"  && sudo ln -sfn "$SHARED/database" "$DST/database"
 
-# warm caches and run migrations
+# Guard Pail in prod (harmless if absent)
+sudo sed -i 's/->withPail();/\/\/ ->withPail();/' "$DST/bootstrap/app.php" || true
+
+echo "==> Clear caches"
 sudo -u www-data php "$DST/artisan" config:clear || true
 sudo -u www-data php "$DST/artisan" route:clear  || true
 sudo -u www-data php "$DST/artisan" view:clear   || true
-sudo -u www-data php "$DST/artisan" key:generate --force || true
+
+echo "==> Ensure APP_KEY exists (do not overwrite if present)"
+if ! grep -q 'APP_KEY=base64:' "$SHARED/.env"; then
+  sudo -u www-data php "$DST/artisan" key:generate --force
+fi
+
+echo "==> Migrate + warm caches"
 sudo -u www-data php "$DST/artisan" migrate --force || true
 sudo -u www-data php "$DST/artisan" config:cache route:cache view:cache || true
 
-# atomically switch current and reload services
+echo "==> Switch current"
 sudo ln -sfn "$DST" "$BASE/current"
+
+echo "==> Reload PHP-FPM and queues"
 sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.3-fpm || true
 sudo supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
 
-# keep only 2 latest releases
+echo "==> Keep only 2 latest releases"
 cd "$REL" && ls -1t | tail -n +3 | xargs -r sudo rm -rf
 
-# show free space
+echo "==> Disk usage"
 df -h "$BASE"
 SH
