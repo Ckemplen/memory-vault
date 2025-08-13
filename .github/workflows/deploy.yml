@@ -12,8 +12,8 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
-          extensions: mbstring, intl, xml, ctype, dom, fileinfo, pdo, pgsql, gd, curl, redis
+          php-version: '8.3'
+          extensions: mbstring, intl, xml, ctype, dom, fileinfo, pdo, sqlite3, pdo_sqlite, pgsql, gd, curl, redis
           coverage: none
 
       - name: Composer install (dev)
