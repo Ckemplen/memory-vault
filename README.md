@@ -79,3 +79,17 @@ A private, family-first platform to capture, curate, and relive memories (photos
 - Local/staging parity tests.
 - CI pipeline runs: Pint, Larastan, Pest, browser snapshots for HTMX.
 - Load test key endpoints before production switch.
+
+## Quickstart
+
+### Seed an initial admin user
+
+```
+php artisan db:seed --class=AdminUserSeeder
+```
+
+Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in your `.env` before seeding.
+
+### Generate an invitation
+
+After logging in as an admin, visit `/admin/invitations` to create an invitation link. Share the generated link with invitees so they can register.
