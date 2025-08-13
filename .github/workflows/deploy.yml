@@ -29,7 +29,7 @@ jobs:
       - name: Lint (Pint)
         run: vendor/bin/pint --test || true
 
-      # Larastan not installed by default in fresh app; keep non-blocking
+      # Larastan not installed in fresh app; keep non-blocking
       - name: Static analysis (Larastan)
         run: vendor/bin/phpstan analyse --no-progress --level=max || true
 
@@ -39,16 +39,20 @@ jobs:
           DB_DATABASE: ':memory:'
         run: vendor/bin/pest || php artisan test
 
-      - uses: actions/setup-node
-  with: { node-version: '20' }
-- name: Build assets (non-blocking)
-  run: |
-    npm ci --no-audit --no-fund || npm install --no-audit --no-fund
-    npm run build || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
+      - name: Build assets (non-blocking)
+        run: |
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          npm run build || true
+
+      - name: Remove cached bootstrap files (avoid stale dev providers)
+        run: rm -f bootstrap/cache/{config.php,packages.php,services.php} || true
 
       - name: Production deps only
-        run: composer install --no-dev --prefer-dist --no-progress
+        run: composer install --no-dev --prefer-dist --no-progress --no-scripts
 
       - name: Create artifact
         run: |
@@ -56,7 +60,9 @@ jobs:
             app bootstrap config database public/build resources routes vendor artisan composer.json composer.lock
 
       - uses: actions/upload-artifact@v4
-        with: { name: release, path: release.tgz }
+        with:
+          name: release
+          path: release.tgz
 
   deploy_prod:
     needs: [build_test]
@@ -64,7 +70,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: release, path: . }
+        with:
+          name: release
+          path: .
 
       - name: Upload & deploy to droplet
         env:
@@ -79,24 +87,23 @@ jobs:
             TS=$(date +%Y%m%d_%H%M%S)
             BASE=/var/www/memory-vault
             REL=$BASE/releases/$TS
-            mkdir -p $REL
-            tar -xzf /tmp/release.tgz -C $REL
+            mkdir -p "$REL"
+            tar -xzf /tmp/release.tgz -C "$REL"
             rm /tmp/release.tgz
 
-            # shared links
-            ln -sfn $BASE/shared/.env $REL/.env
+            ln -sfn $BASE/shared/.env "$REL/.env"
             mkdir -p $BASE/shared/storage
-            rm -rf $REL/storage
-            ln -sfn $BASE/shared/storage $REL/storage
+            rm -rf "$REL/storage"
+            ln -sfn $BASE/shared/storage "$REL/storage"
 
-            cd $REL
+            cd "$REL"
             php artisan storage:link || true
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
             php artisan migrate --force || true
 
-            ln -sfn $REL $BASE/current
+            ln -sfn "$REL" "$BASE/current"
             systemctl reload php-fpm || systemctl reload php8.4-fpm || true
             supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
           SH
