@@ -136,7 +136,8 @@ jobs:
 
           echo "==> Migrate + warm caches"
           sudo -u www-data php "$DST/artisan" migrate --force || true
-          sudo -u www-data php "$DST/artisan" config:cache route:cache view:cache || true
+          sudo -u www-data php "$DST/artisan" config:cache || true
+          sudo -u www-data php "$DST/artisan" route:cache || true
 
           echo "==> Switch current"
           sudo ln -sfn "$DST" "$BASE/current"
