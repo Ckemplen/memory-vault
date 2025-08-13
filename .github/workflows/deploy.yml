@@ -1,7 +1,8 @@
 name: ci-cd
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch: {}
 
 jobs:
@@ -29,7 +30,6 @@ jobs:
       - name: Lint (Pint)
         run: vendor/bin/pint --test || true
 
-      # Larastan not installed in fresh app; keep non-blocking
       - name: Static analysis (Larastan)
         run: vendor/bin/phpstan analyse --no-progress --level=max || true
 
@@ -48,7 +48,7 @@ jobs:
           npm ci --no-audit --no-fund || npm install --no-audit --no-fund
           npm run build || true
 
-      - name: Remove cached bootstrap files (avoid stale dev providers)
+      - name: Remove cached bootstrap files
         run: rm -f bootstrap/cache/{config.php,packages.php,services.php} || true
 
       - name: Production deps only
@@ -83,34 +83,45 @@ jobs:
           echo "$KEY" > key && chmod 600 key
           scp -i key -o StrictHostKeyChecking=no release.tgz $USER@$HOST:/tmp/release.tgz
           ssh -i key -o StrictHostKeyChecking=no $USER@$HOST bash -s <<'SH'
-            set -euo pipefail
-            TS=$(date +%Y%m%d_%H%M%S)
-            BASE=/var/www/memory-vault
-            REL=$BASE/releases/$TS
-            mkdir -p "$REL"
-            tar -xzf /tmp/release.tgz -C "$REL"
-            rm /tmp/release.tgz
+set -euo pipefail
+BASE=/var/www/memory-vault
+REL=$BASE/releases
+SHARED=$BASE/shared
+TS=$(date +%Y%m%d_%H%M%S)
+DST=$REL/$TS
 
-            ln -sfn $BASE/shared/.env "$REL/.env"
-            mkdir -p $BASE/shared/storage
-            rm -rf "$REL/storage"
-            ln -sfn $BASE/shared/storage "$REL/storage"
+# ensure base structure exists
+sudo mkdir -p $REL $SHARED/{storage,database}
+sudo touch $SHARED/database/database.sqlite
+sudo chown -R www-data:www-data $SHARED
+sudo chmod -R ug+rwX $SHARED
 
-            cd "$REL"
-            php artisan storage:link || true
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
-            php artisan migrate --force || true
+# unpack new release
+sudo mkdir -p "$DST"
+sudo tar -xzf /tmp/release.tgz -C "$DST"
+sudo rm -f /tmp/release.tgz
 
-            ln -sfn "$REL" "$BASE/current"
-            systemctl reload php-fpm || systemctl reload php8.4-fpm || true
-            supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+# link shared resources into the new release
+sudo ln -sfn $SHARED/.env "$DST/.env"
+sudo rm -rf "$DST/storage" && sudo ln -sfn $SHARED/storage "$DST/storage"
+sudo rm -rf "$DST/database" && sudo ln -sfn $SHARED/database "$DST/database"
 
-            # Keep only the latest 2 releases (current + 1 previous)
-            cd $BASE/releases
-            ls -1t | tail -n +3 | xargs -r rm -rf
+# warm caches and run migrations
+sudo -u www-data php "$DST/artisan" config:clear || true
+sudo -u www-data php "$DST/artisan" route:clear  || true
+sudo -u www-data php "$DST/artisan" view:clear   || true
+sudo -u www-data php "$DST/artisan" key:generate --force || true
+sudo -u www-data php "$DST/artisan" migrate --force || true
+sudo -u www-data php "$DST/artisan" config:cache route:cache view:cache || true
 
-            # Show disk usage after cleanup
-            df -h /var/www/memory-vault
-          SH
+# atomically switch current and reload services
+sudo ln -sfn "$DST" "$BASE/current"
+sudo systemctl reload php8.4-fpm || sudo systemctl reload php8.3-fpm || true
+sudo supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+
+# keep only 2 latest releases
+cd "$REL" && ls -1t | tail -n +3 | xargs -r sudo rm -rf
+
+# show free space
+df -h "$BASE"
+SH
