@@ -104,6 +104,10 @@ jobs:
             php artisan migrate --force || true
 
             ln -sfn "$REL" "$BASE/current"
-            systemctl reload php-fpm || systemctl reload php8.4-fpm || true
-            supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+systemctl reload php-fpm || systemctl reload php8.4-fpm || true
+supervisorctl restart mv-queue-default: mv-queue-media: mv-horizon: || true
+
+# Keep only the latest 2 releases (current + 1 previous)
+cd $BASE/releases
+ls -1t | tail -n +3 | xargs -r rm -rf
           SH
